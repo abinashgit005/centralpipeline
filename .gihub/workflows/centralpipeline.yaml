@@ -1,0 +1,107 @@
+name: Central Build Pipeline
+
+on:
+  repository_dispatch:
+    types: [run-pipeline]   # will be triggered by developer's repo
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: poc101-500018
+  REGION: asia-south1
+  REPO: gcppoc
+
+jobs:
+  build-and-push:
+    name: Build and Push
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Generate token via GitHub App to access developer's repo ──
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.PLATFORM_APP_ID }}
+          private-key: ${{ secrets.PLATFORM_APP_PRIVATE_KEY }}
+          owner: ${{ github.event.client_payload.org }}
+
+      # ── 2. Checkout DEVELOPER's code (not your repo) ──
+      - name: Checkout Developer Code
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.client_payload.repo }}
+          ref: ${{ github.event.client_payload.sha }}
+          token: ${{ steps.app-token.outputs.token }}
+
+      # ── 3. Post "pending" status on developer's commit/PR ──
+      - name: Post Pending Status
+        run: |
+          curl -s -X POST \
+            -H "Authorization: token ${{ steps.app-token.outputs.token }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/${{ github.event.client_payload.repo }}/statuses/${{ github.event.client_payload.sha }} \
+            -d '{
+              "state": "pending",
+              "description": "Build pipeline running...",
+              "context": "platform-ci/build"
+            }'
+
+      # ── 4. Authenticate to GCP (YOUR credentials, developer never sees this) ──
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      # ── 5. Setup gcloud CLI ──
+      - name: Setup gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      # ── 6. Configure Docker for YOUR Artifact Registry ──
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
+
+      # ── 7. Build Docker image  ──
+      # Image name = developer's repo name + their commit SHA as tag
+      - name: Build Docker Image
+        run: |
+          IMAGE_NAME=$(echo "${{ github.event.client_payload.repo }}" | cut -d'/' -f2)
+          docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO }}/${IMAGE_NAME}:${{ github.event.client_payload.sha }} .
+          docker tag \
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO }}/${IMAGE_NAME}:${{ github.event.client_payload.sha }} \
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO }}/${IMAGE_NAME}:latest
+
+      # ── 8. Push to YOUR GCP Artifact Registry ──
+      - name: Push Docker Image
+        run: |
+          IMAGE_NAME=$(echo "${{ github.event.client_payload.repo }}" | cut -d'/' -f2)
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO }}/${IMAGE_NAME}:${{ github.event.client_payload.sha }}
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO }}/${IMAGE_NAME}:latest
+
+      # ── 9. Post SUCCESS status back to developer's PR ──
+      - name: Post Success Status
+        if: success()
+        run: |
+          IMAGE_NAME=$(echo "${{ github.event.client_payload.repo }}" | cut -d'/' -f2)
+          curl -s -X POST \
+            -H "Authorization: token ${{ steps.app-token.outputs.token }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/${{ github.event.client_payload.repo }}/statuses/${{ github.event.client_payload.sha }} \
+            -d "{
+              \"state\": \"success\",
+              \"description\": \"Image pushed: ${IMAGE_NAME}:${{ github.event.client_payload.sha }}\",
+              \"context\": \"platform-ci/build\"
+            }"
+
+      # ── 10. Post FAILURE status back to developer's PR ──
+      - name: Post Failure Status
+        if: failure()
+        run: |
+          curl -s -X POST \
+            -H "Authorization: token ${{ steps.app-token.outputs.token }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/${{ github.event.client_payload.repo }}/statuses/${{ github.event.client_payload.sha }} \
+            -d '{
+              "state": "failure",
+              "description": "Build failed! Check platform pipeline logs.",
+              "context": "platform-ci/build"
+            }'
