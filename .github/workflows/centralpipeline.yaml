@@ -105,3 +105,73 @@ jobs:
               "description": "Build failed! Check platform pipeline logs.",
               "context": "platform-ci/build"
             }'
+      # 11. Update image tag in ArgoCD config repo
+      - name: Update Image Tag in ArgoCD Config
+        run: |
+          git config --global user.email "pipeline@platform.com"
+          git config --global user.name "Central Pipeline"
+
+          IMAGE_NAME=$(echo "${{ github.event.client_payload.repo }}" | cut -d'/' -f2)
+          SHA=${{ github.event.client_payload.sha }}
+
+          git clone https://x-access-token:${{ secrets.GITOPS_TOKEN }}@github.com/abinashgit005/argocd-config.git
+          cd argocd-config
+
+          mkdir -p apps/${IMAGE_NAME}/dev
+
+          cat > apps/${IMAGE_NAME}/dev/deployment.yaml << 'MANIFEST'
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: dev
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: APPNAME
+            namespace: dev
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: APPNAME
+            template:
+              metadata:
+                labels:
+                  app: APPNAME
+              spec:
+                containers:
+                - name: APPNAME
+                  image: asia-south1-docker.pkg.dev/poc101-500018/gcppoc/APPNAME:SHA
+                  ports:
+                  - containerPort: 80
+                  resources:
+                    requests:
+                      memory: "128Mi"
+                      cpu: "100m"
+                    limits:
+                      memory: "256Mi"
+                      cpu: "200m"
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: APPNAME-service
+            namespace: dev
+          spec:
+            selector:
+              app: APPNAME
+            ports:
+            - protocol: TCP
+              port: 80
+              targetPort: 80
+            type: LoadBalancer
+          MANIFEST
+
+          # Replace placeholders with actual values
+          sed -i "s|APPNAME|${IMAGE_NAME}|g" apps/${IMAGE_NAME}/dev/deployment.yaml
+          sed -i "s|SHA|${SHA}|g" apps/${IMAGE_NAME}/dev/deployment.yaml
+
+          git add .
+          git commit -m "Deploy ${IMAGE_NAME}:${SHA} to DEV"
+          git push
