@@ -1,7 +1,7 @@
 # centralpipeline
 
 GKE cluster setup command:
-
+[reference](https://docs.cloud.google.com/sdk/gcloud/reference/container/clusters/create)
 ```yaml
 gcloud container clusters create dev-cluster \
   --project=poc101-500018 \
