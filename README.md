@@ -1,6 +1,5 @@
-# centralpipeline
 
-GKE cluster setup command:
+### GKE cluster setup command:
 [reference](https://docs.cloud.google.com/sdk/gcloud/reference/container/clusters/create)
 ```yaml
 gcloud container clusters create dev-cluster \
@@ -12,3 +11,23 @@ gcloud container clusters create dev-cluster \
   --no-enable-basic-auth \
   --no-issue-client-certificate
   ```
+### Argocd 
+```bash
+kubectl create namespace argocd
+
+# Download the manifest 
+curl -o argocd-install.yaml \
+  https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+# apply from local file
+kubectl apply -n argocd -f argocd-install.yaml
+
+kubectl wait --for=condition=available --timeout=300s deployment/argocd-server -n argocd
+
+kubectl patch svc argocd-server -n argocd -p '{"spec": {"type": "LoadBalancer"}}'
+
+kubectl get secret argocd-initial-admin-secret \
+  -n argocd \
+  -o jsonpath="{.data.password}" | base64 -d && echo
+yA7EQBwrfmI-ftdJ
+kubectl get svc argocd-server -n argocd
+```
