@@ -31,3 +31,4 @@ kubectl get secret argocd-initial-admin-secret \
 yA7EQBwrfmI-ftdJ
 kubectl get svc argocd-server -n argocd
 ```
+gh key is being used as dispatch token and pat token as well.
