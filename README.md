@@ -28,7 +28,7 @@ kubectl patch svc argocd-server -n argocd -p '{"spec": {"type": "LoadBalancer"}}
 kubectl get secret argocd-initial-admin-secret \
   -n argocd \
   -o jsonpath="{.data.password}" | base64 -d && echo
-yA7EQBwrfmI-ftdJ
+QL9UsjlylReMgn3u
 kubectl get svc argocd-server -n argocd
 ```
 gh key is being used as dispatch token and pat token as well.
