@@ -12,7 +12,7 @@ gcloud container clusters create dev-cluster \
   --no-issue-client-certificate
   ```
   ```yaml
-  gcloud container clusters create dev-cluster \
+  gcloud container clusters resize dev-cluster \
   --project=poc101-500018 \
   --region=asia-south1 \
   --num-nodes=0 \
