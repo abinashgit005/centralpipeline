@@ -11,6 +11,13 @@ gcloud container clusters create dev-cluster \
   --no-enable-basic-auth \
   --no-issue-client-certificate
   ```
+  ```yaml
+  gcloud container clusters create dev-cluster \
+  --project=poc101-500018 \
+  --region=asia-south1 \
+  --num-nodes=0 \
+  --node-pool=default-pool
+  ```
 ### Argocd 
 ```bash
 kubectl create namespace argocd
