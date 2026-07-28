@@ -40,6 +40,9 @@ kubectl get svc argocd-server -n argocd
 ```
 gh key is being used as dispatch token and pat token as well.
 
+```yaml
+gcloud services enable aiplatform.googlwapis.com --project=poc101-500018
+```
       # LAST STEP - AI Failure Analysis
       - name: AI Failure Analysis
         if: failure()
