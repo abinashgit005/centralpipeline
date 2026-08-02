@@ -218,4 +218,4 @@ jobs:
           echo "Gemini response saved!"
 
           # Run Python script to post comment
-          python3 scripts/ai_analysis.py
+          python3 /home/runner/work/centralpipeline/centralpipeline/platform/scripts/ai_analysis.py
