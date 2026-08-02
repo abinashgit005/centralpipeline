@@ -178,49 +178,100 @@ jobs:
             https://api.github.com/repos/${{ github.event.client_payload.repo }}/statuses/${{ github.event.client_payload.sha }} \
             -d '{"state":"failure","description":"Pipeline failed!","context":"platform-ci/build"}'
 
+      # LAST STEP - AI Failure Analysis using Gemini 2.5 Flash
       - name: AI Failure Analysis
         if: failure()
+        env:
+          APP_NAME: ${{ steps.platform.outputs.app_name }}
+          SHA: ${{ github.event.client_payload.sha }}
+          REPO: ${{ github.event.client_payload.repo }}
+          GITHUB_TOKEN_VAL: ${{ steps.app-token.outputs.token }}
         run: |
-          APP_NAME=${{ steps.platform.outputs.app_name }}
-          SHA=${{ github.event.client_payload.sha }}
+          echo "Starting AI Failure Analysis..."
 
           # Collect error logs
-          ERROR_LOG=$(cat /tmp/build-output.txt 2>/dev/null | tail -20 | tr '\n' ' ' | tr '"' "'")
+          ERROR_LOG=""
+          for f in /tmp/build-output.txt /tmp/push-output.txt; do
+            if [ -f "$f" ]; then
+              ERROR_LOG="${ERROR_LOG}$(tail -20 $f)"
+            fi
+          done
 
-          # Get access token
+          # Clean log for JSON
+          CLEAN_LOG=$(echo "$ERROR_LOG" | tr '\n' ' ' | tr '"' "'" | tr '\\' '/' | head -c 1000)
+
+          echo "Error log captured: ${CLEAN_LOG}"
+
+          # Get GCP access token
           ACCESS_TOKEN=$(gcloud auth print-access-token)
 
-          # Call Gemini 2.5 Flash
+          # Call Gemini 2.5 Flash via Vertex AI
           AI_RESPONSE=$(curl -s -X POST \
             -H "Authorization: Bearer ${ACCESS_TOKEN}" \
             -H "Content-Type: application/json" \
             "https://aiplatform.googleapis.com/v1/projects/poc101-500018/locations/global/publishers/google/models/gemini-2.5-flash:generateContent" \
-            -d "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"DevOps expert. Pipeline failed for ${APP_NAME}. Error: ${ERROR_LOG}. Give: 1.Root Cause 2.Fix Steps 3.Prevention\"}]}]}")
+            -d "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"You are a DevOps expert. CI/CD pipeline failed for app '${APP_NAME}' at commit '${SHA}'. Error logs: ${CLEAN_LOG}. Provide: 1. Root Cause 2. How to Fix 3. Steps Developer Should Take 4. How to Prevent. Be concise and developer friendly.\"}]}]}")
 
-          # Extract response
+          echo "Gemini Response: ${AI_RESPONSE}"
+
+          # Extract AI explanation
           AI_EXPLANATION=$(echo "$AI_RESPONSE" | python3 -c "
           import sys, json
           try:
             data = json.load(sys.stdin)
             if 'candidates' in data:
-              print(data['candidates'][0]['content']['parts'][0]['text'])
+              text = data['candidates'][0]['content']['parts'][0]['text']
+              print(text)
+            elif 'error' in data:
+              print('Gemini Error:', data['error'].get('message', 'Unknown error'))
             else:
-              print('AI Error:', json.dumps(data))
+              print('Unexpected response:', json.dumps(data))
           except Exception as e:
             print('Parse error:', str(e))
           ")
 
-          echo "AI Says: ${AI_EXPLANATION}"
+          echo "AI Explanation: ${AI_EXPLANATION}"
 
-          # Escape for JSON
-          ESCAPED=$(echo "$AI_EXPLANATION" | python3 -c "
-          import sys, json
-          print(json.dumps(sys.stdin.read()))
-          ")
+          # Save to file
+          echo "$AI_EXPLANATION" > /tmp/ai-explanation.txt
 
-          # Post to developer's commit
-          curl -s -X POST \
-            -H "Authorization: token ${{ steps.app-token.outputs.token }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/${{ github.event.client_payload.repo }}/commits/${{ github.event.client_payload.sha }}/comments \
-            -d "{\"body\": \"## 🤖 AI Pipeline Failure Analysis\n\n${ESCAPED}\n\n---\n> App: ${APP_NAME}\n> Commit: ${SHA}\n> *Analyzed by Gemini 2.5 Flash* 🤖\"}"
+          # Post to developer's commit using Python for safe JSON
+          python3 << PYEOF
+import json, urllib.request, os
+
+with open('/tmp/ai-explanation.txt') as f:
+    ai_text = f.read().strip()
+
+app_name = os.environ.get('APP_NAME', 'unknown')
+sha = os.environ.get('SHA', 'unknown')
+repo = os.environ.get('REPO', 'unknown')
+token = os.environ.get('GITHUB_TOKEN_VAL', '')
+
+body = f"""## \U0001f916 AI Pipeline Failure Analysis
+
+{ai_text}
+
+---
+> **App:** {app_name}
+> **Commit:** {sha}
+> *Analyzed by Google Gemini 2.5 Flash* \U0001f916"""
+
+payload = json.dumps({"body": body}).encode('utf-8')
+
+req = urllib.request.Request(
+    f"https://api.github.com/repos/{repo}/commits/{sha}/comments",
+    data=payload,
+    headers={
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github.v3+json",
+        "Content-Type": "application/json"
+    },
+    method="POST"
+)
+
+try:
+    with urllib.request.urlopen(req) as r:
+        print("Comment posted successfully! Status:", r.status)
+except Exception as e:
+    print("Error posting comment:", str(e))
+PYEOF
