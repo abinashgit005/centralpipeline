@@ -178,7 +178,6 @@ jobs:
             https://api.github.com/repos/${{ github.event.client_payload.repo }}/statuses/${{ github.event.client_payload.sha }} \
             -d '{"state":"failure","description":"Pipeline failed!","context":"platform-ci/build"}'
 
-      #  AI Failure Analysis using Gemini CLI
       - name: AI Failure Analysis
         if: failure()
         run: |
@@ -186,23 +185,32 @@ jobs:
           SHA=${{ github.event.client_payload.sha }}
 
           # Collect error logs
-          ERROR_LOG=""
-          for f in /tmp/build-output.txt /tmp/push-output.txt; do
-            if [ -f "$f" ]; then
-              ERROR_LOG="${ERROR_LOG}$(tail -20 $f)"
-            fi
-          done
+          ERROR_LOG=$(cat /tmp/build-output.txt 2>/dev/null | tail -20 | tr '\n' ' ' | tr '"' "'")
 
-          # Install Gemini CLI
-          npm install -g @google/gemini-cli
+          # Get access token
+          ACCESS_TOKEN=$(gcloud auth print-access-token)
 
-          # Authenticate using GCP service account
-          gcloud auth application-default print-access-token
+          # Call Gemini 2.5 Flash
+          AI_RESPONSE=$(curl -s -X POST \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            -H "Content-Type: application/json" \
+            "https://aiplatform.googleapis.com/v1/projects/poc101-500018/locations/global/publishers/google/models/gemini-2.5-flash:generateContent" \
+            -d "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"DevOps expert. Pipeline failed for ${APP_NAME}. Error: ${ERROR_LOG}. Give: 1.Root Cause 2.Fix Steps 3.Prevention\"}]}]}")
 
-          # Call Gemini CLI non-interactively
-          AI_EXPLANATION=$(gemini -p "You are a DevOps expert. CI/CD pipeline failed for app '${APP_NAME}' commit '${SHA}'. Error logs: ${ERROR_LOG}. Provide: 1.Root Cause 2.How to Fix 3.Steps Developer Should Take 4.How to Prevent. Be concise and developer friendly." 2>/dev/null)
+          # Extract response
+          AI_EXPLANATION=$(echo "$AI_RESPONSE" | python3 -c "
+          import sys, json
+          try:
+            data = json.load(sys.stdin)
+            if 'candidates' in data:
+              print(data['candidates'][0]['content']['parts'][0]['text'])
+            else:
+              print('AI Error:', json.dumps(data))
+          except Exception as e:
+            print('Parse error:', str(e))
+          ")
 
-          echo "AI Analysis: ${AI_EXPLANATION}"
+          echo "AI Says: ${AI_EXPLANATION}"
 
           # Escape for JSON
           ESCAPED=$(echo "$AI_EXPLANATION" | python3 -c "
@@ -210,9 +218,9 @@ jobs:
           print(json.dumps(sys.stdin.read()))
           ")
 
-          # Post to developer's commit as comment
+          # Post to developer's commit
           curl -s -X POST \
             -H "Authorization: token ${{ steps.app-token.outputs.token }}" \
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/${{ github.event.client_payload.repo }}/commits/${{ github.event.client_payload.sha }}/comments \
-            -d "{\"body\": \"## 🤖 AI Pipeline Failure Analysis\n\n${ESCAPED}\n\n---\n> App: ${APP_NAME}\n> Commit: ${SHA}\n> *Analyzed by Google Gemini AI* 🤖\"}"
+            -d "{\"body\": \"## 🤖 AI Pipeline Failure Analysis\n\n${ESCAPED}\n\n---\n> App: ${APP_NAME}\n> Commit: ${SHA}\n> *Analyzed by Gemini 2.5 Flash* 🤖\"}"
