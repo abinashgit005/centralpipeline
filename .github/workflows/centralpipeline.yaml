@@ -177,6 +177,14 @@ jobs:
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/${{ github.event.client_payload.repo }}/statuses/${{ github.event.client_payload.sha }} \
             -d '{"state":"failure","description":"Pipeline failed!","context":"platform-ci/build"}'
+      
+      - name: Checkout Platform Scripts
+        if: failure()
+        uses: actions/checkout@v4
+        with:
+          repository: abinashgit005/centralpipeline
+          path: platform
+          token: ${{ secrets.GITOPS_TOKEN }}
 
       # LAST STEP - AI Failure Analysis using Gemini 2.5 Flash
       - name: AI Failure Analysis
