@@ -221,7 +221,7 @@ jobs:
 
       #     python3 "$GITHUB_WORKSPACE/platform/scripts/ai_analysis.py"
       
-          - name: AI Failure Analysis
+      - name: AI Failure Analysis
         if: failure()
         env:
           APP_NAME: ${{ steps.platform.outputs.app_name }}
