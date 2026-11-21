@@ -6,14 +6,19 @@ on:
   workflow_dispatch:
 
 env:
-  PROJECT_ID: poc101-500018
-  REGION: asia-south1
-  REPO: gcppoc
+  PROJECT_ID: central-pipeline-515411
+  REGION: us-central1
+  REPO: poc-repo
+  WIF_PROVIDER: projects/1029857794023/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+  GCP_SA: github-actions-sa@central-pipeline-515411.iam.gserviceaccount.com
 
 jobs:
   build-and-push:
     name: Build and Push
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # required for Workload Identity Federation
 
     steps:
       - name: Generate GitHub App Token
@@ -35,12 +40,10 @@ jobs:
       - name: Read platform.yaml
         id: platform
         run: |
-          # Read values from platform.yaml
           APP_NAME=$(grep 'name:' platform.yaml | head -1 | awk '{print $2}')
           APP_PORT=$(grep 'port:' platform.yaml | awk '{print $2}')
           APP_REPLICAS=$(grep 'replicas:' platform.yaml | awk '{print $2}')
 
-          # If platform.yaml missing → use repo name as default
           if [ -z "$APP_NAME" ]; then
             APP_NAME=$(echo "${{ github.event.client_payload.repo }}" | cut -d'/' -f2)
           fi
@@ -61,10 +64,12 @@ jobs:
             https://api.github.com/repos/${{ github.event.client_payload.repo }}/statuses/${{ github.event.client_payload.sha }} \
             -d '{"state":"pending","description":"Pipeline running...","context":"platform-ci/build"}'
 
+      # ── Keyless auth (no GCP_SA_KEY needed) ──
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.GCP_SA }}
 
       - name: Setup gcloud CLI
         uses: google-github-actions/setup-gcloud@v2
@@ -81,6 +86,7 @@ jobs:
             -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO }}/${IMAGE_NAME}:${SHA} \
             . 2>&1 | tee /tmp/build-output.txt
           exit ${PIPESTATUS[0]}
+
       - name: Push Docker Image
         run: |
           IMAGE_NAME=${{ steps.platform.outputs.app_name }}
@@ -106,8 +112,7 @@ jobs:
 
           mkdir -p apps/${APP_NAME}/dev
 
-          # Generate manifest dynamically
-          cat > apps/${APP_NAME}/dev/deployment.yaml << EOF
+          cat > apps/${APP_NAME}/dev/deployment.yaml << MANIFEST
           apiVersion: v1
           kind: Namespace
           metadata:
@@ -154,7 +159,7 @@ jobs:
               port: 80
               targetPort: ${APP_PORT}
             type: LoadBalancer
-          EOF
+          MANIFEST
 
           git add .
           git commit -m "Deploy ${APP_NAME}:${SHA} to DEV"
@@ -177,7 +182,7 @@ jobs:
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/${{ github.event.client_payload.repo }}/statuses/${{ github.event.client_payload.sha }} \
             -d '{"state":"failure","description":"Pipeline failed!","context":"platform-ci/build"}'
-      
+
       - name: Checkout Platform Scripts
         if: failure()
         uses: actions/checkout@v4
@@ -197,25 +202,21 @@ jobs:
         run: |
           echo "Starting AI Failure Analysis..."
 
-          # Collect error logs
           ERROR_LOG=$(cat /tmp/build-output.txt 2>/dev/null \
             | tail -20 \
             | tr '\n' ' ' \
             | tr '"' "'" \
             | head -c 500)
 
-          # Get GCP access token
           ACCESS_TOKEN=$(gcloud auth print-access-token)
 
-          # Call Gemini 2.5 Flash
           curl -s -X POST \
             -H "Authorization: Bearer ${ACCESS_TOKEN}" \
             -H "Content-Type: application/json" \
-            "https://aiplatform.googleapis.com/v1/projects/poc101-500018/locations/global/publishers/google/models/gemini-2.5-flash:generateContent" \
+            "https://aiplatform.googleapis.com/v1/projects/${{ env.PROJECT_ID }}/locations/global/publishers/google/models/gemini-2.5-flash:generateContent" \
             -d "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"You are a DevOps expert. Pipeline failed for ${APP_NAME}. Error: ${ERROR_LOG}. Give: 1.Root Cause 2.Fix Steps 3.Prevention\"}]}]}" \
             > /tmp/ai-response.json
 
           echo "Gemini response saved!"
 
-          # Run Python script to post comment
-          python3 /home/runner/work/centralpipeline/centralpipeline/platform/scripts/ai_analysis.py
+          python3 "$GITHUB_WORKSPACE/platform/scripts/ai_analysis.py"
