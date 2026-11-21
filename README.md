@@ -22,23 +22,20 @@ gcloud container clusters create dev-cluster \
 ```bash
 kubectl create namespace argocd
 
-# Download the manifest 
-curl -o argocd-install.yaml \
-  https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-# apply from local file
-kubectl apply -n argocd -f argocd-install.yaml
-
-kubectl wait --for=condition=available --timeout=300s deployment/argocd-server -n argocd
+kubectl create namespace argocd
+kubectl apply -n argocd --server-side --force-conflicts \
+  -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl get pods -n argocd -w
 
 kubectl patch svc argocd-server -n argocd -p '{"spec": {"type": "LoadBalancer"}}'
+kubectl get svc argocd-server -n argocd
 
-kubectl get secret argocd-initial-admin-secret \
-  -n argocd \
-  -o jsonpath="{.data.password}" | base64 -d && echo
-QL9UsjlylReMgn3u
+kubectl get secret argocd-initial-admin-secret -n argocd \
+  -o jsonpath="{.data.password}" | base64 -d; echo
+vFF511wYpkjltljc
 kubectl get svc argocd-server -n argocd
 ```
-gh key is being used as dispatch token and pat token as well.
+gh key is being used as dispatch token to trigger from dev-repo to central pipeline and gitops_token for GCP intraction.
 
 ```yaml
 gcloud services enable aiplatform.googlwapis.com --project=poc101-500018
