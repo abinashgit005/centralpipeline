@@ -2,21 +2,24 @@
 ### GKE cluster setup command:
 [reference](https://docs.cloud.google.com/sdk/gcloud/reference/container/clusters/create)
 ```yaml
-gcloud container clusters create dev-cluster \
-  --project=poc101-500018 \
-  --region=asia-south1 \
-  --num-nodes=1 \
-  --machine-type=e2-medium \
-  --disk-size=20GB \
-  --no-enable-basic-auth \
-  --no-issue-client-certificate
+gcloud config set project central-pipeline-515411
+gcloud container clusters get-credentials poc-cluster --region us-central1
+
+# 1. Stop ArgoCD first, or its self-heal undoes everything below
+kubectl scale deployment --all -n argocd --replicas=0
+kubectl scale statefulset --all -n argocd --replicas=0
+
+# 2. Stop the app and release the load balancer
+kubectl scale deployment devrepo -n dev --replicas=0
+kubectl delete svc devrepo-service -n dev
+
+# 3. Release the ArgoCD UI load balancer
+kubectl patch svc argocd-server -n argocd -p '{"spec":{"type":"ClusterIP"}}'
   ```
   ```yaml
-  gcloud container clusters resize dev-cluster \
-  --project=poc101-500018 \
-  --region=asia-south1 \
-  --num-nodes=0 \
-  --node-pool=default-pool
+kubectl scale statefulset --all -n argocd --replicas=1
+kubectl scale deployment --all -n argocd --replicas=1
+kubectl patch svc argocd-server -n argocd -p '{"spec":{"type":"LoadBalancer"}}'
   ```
 ### Argocd 
 ```bash
@@ -38,5 +41,5 @@ kubectl get svc argocd-server -n argocd
 gh key is being used as dispatch token to trigger from dev-repo to central pipeline and gitops_token for GCP intraction.
 
 ```yaml
-gcloud services enable aiplatform.googlwapis.com --project=poc101-500018
+gcloud services enable aiplatform.googlwapis.com --project=central-pipeline-515411
 ```
