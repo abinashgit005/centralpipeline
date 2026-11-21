@@ -192,31 +192,57 @@ jobs:
           token: ${{ secrets.GITOPS_TOKEN }}
 
       # LAST STEP - AI Failure Analysis using Gemini 2.5 Flash
-      - name: AI Failure Analysis
+      # - name: AI Failure Analysis
+      #   if: failure()
+      #   env:
+      #     APP_NAME: ${{ steps.platform.outputs.app_name }}
+      #     SHA: ${{ github.event.client_payload.sha }}
+      #     REPO: ${{ github.event.client_payload.repo }}
+      #     GITHUB_TOKEN_VAL: ${{ steps.app-token.outputs.token }}
+      #   run: |
+      #     echo "Starting AI Failure Analysis..."
+
+      #     ERROR_LOG=$(cat /tmp/build-output.txt 2>/dev/null \
+      #       | tail -20 \
+      #       | tr '\n' ' ' \
+      #       | tr '"' "'" \
+      #       | head -c 500)
+
+      #     ACCESS_TOKEN=$(gcloud auth print-access-token)
+
+      #     curl -s -X POST \
+      #       -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+      #       -H "Content-Type: application/json" \
+      #       "https://aiplatform.googleapis.com/v1/projects/${{ env.PROJECT_ID }}/locations/global/publishers/google/models/gemini-2.5-flash:generateContent" \
+      #       -d "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"You are a DevOps expert. Pipeline failed for ${APP_NAME}. Error: ${ERROR_LOG}. Give: 1.Root Cause 2.Fix Steps 3.Prevention\"}]}]}" \
+      #       > /tmp/ai-response.json
+
+      #     echo "Gemini response saved!"
+
+      #     python3 "$GITHUB_WORKSPACE/platform/scripts/ai_analysis.py"
+      
+          - name: AI Failure Analysis
         if: failure()
         env:
           APP_NAME: ${{ steps.platform.outputs.app_name }}
           SHA: ${{ github.event.client_payload.sha }}
           REPO: ${{ github.event.client_payload.repo }}
           GITHUB_TOKEN_VAL: ${{ steps.app-token.outputs.token }}
+          GEMINI_MODEL: gemini-3.1-flash-lite
         run: |
-          echo "Starting AI Failure Analysis..."
+          ERROR_LOG=$(tail -c 3000 /tmp/build-output.txt 2>/dev/null)
 
-          ERROR_LOG=$(cat /tmp/build-output.txt 2>/dev/null \
-            | tail -20 \
-            | tr '\n' ' ' \
-            | tr '"' "'" \
-            | head -c 500)
-
-          ACCESS_TOKEN=$(gcloud auth print-access-token)
+          jq -n --arg app "$APP_NAME" --arg log "$ERROR_LOG" '{
+            contents: [{role: "user", parts: [{text:
+              ("You are a DevOps expert. The Docker build failed for " + $app +
+               ". End of the build log:\n" + $log +
+               "\n\nGive: 1. Root cause 2. Fix steps 3. Prevention. Be concise.")}]}]
+          }' > /tmp/ai-request.json
 
           curl -s -X POST \
-            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            -H "Authorization: Bearer $(gcloud auth print-access-token)" \
             -H "Content-Type: application/json" \
-            "https://aiplatform.googleapis.com/v1/projects/${{ env.PROJECT_ID }}/locations/global/publishers/google/models/gemini-2.5-flash:generateContent" \
-            -d "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"You are a DevOps expert. Pipeline failed for ${APP_NAME}. Error: ${ERROR_LOG}. Give: 1.Root Cause 2.Fix Steps 3.Prevention\"}]}]}" \
-            > /tmp/ai-response.json
-
-          echo "Gemini response saved!"
+            "https://aiplatform.googleapis.com/v1/projects/${{ env.PROJECT_ID }}/locations/global/publishers/google/models/${GEMINI_MODEL}:generateContent" \
+            -d @/tmp/ai-request.json > /tmp/ai-response.json
 
           python3 "$GITHUB_WORKSPACE/platform/scripts/ai_analysis.py"
